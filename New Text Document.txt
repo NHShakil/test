@@ -116,7 +116,7 @@ namespace CH341A_Programmer
 
             byte slaveAddr = 0x50;
             byte[] dataAddr = new byte[2];
-            int dataAddrBytes = 1;
+            int dataAddrBytes = 0;
 
             ushort number = Convert.ToUInt16(address);
             byte upper = (byte)((number & 0xFF00) >> 8);
@@ -135,68 +135,14 @@ namespace CH341A_Programmer
             }
             else if (addressType == 2)
             {
-                if (Tools.IsBitSet(upper, 0))
-                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
-                else
-                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
-
                 slaveAddr = I2C_CHIP_ADDRESS;
                 dataAddr[0] = lower;
             }
-            else if (addressType == 3)
-            {
-                if (Tools.IsBitSet(upper, 0))
-                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
-                else
-                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
-                if (Tools.IsBitSet(upper, 1))
-                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 2);
-                else
-                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 2);
-
-                slaveAddr = I2C_CHIP_ADDRESS;
-                dataAddr[0] = lower;
-            }
-            else if (addressType == 4)
-            {
-                if (Tools.IsBitSet(upper, 0))
-                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
-                else
-                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
-                if (Tools.IsBitSet(upper, 1))
-                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 2);
-                else
-                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 2);
-                if (Tools.IsBitSet(upper, 2))
-                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 3);
-                else
-                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 3);
-
-                slaveAddr = I2C_CHIP_ADDRESS;
-                dataAddr[0] = lower;
-            }
-            else if (addressType == 5)
-            {
-                slaveAddr = I2C_CHIP_ADDRESS;
-                dataAddr[0] = lower;
-                dataAddr[1] = upper;
-                dataAddrBytes = 2;
-            }
-            else if (addressType == 6)
-            {
-                if (Tools.IsBitSet(upper, 0))
-                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
-                else
-                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
-
-                slaveAddr = I2C_CHIP_ADDRESS;
-                dataAddr[0] = lower;
-                dataAddr[1] = upper;
-                dataAddrBytes = 2;
-            }
-
+            
+           
+            
             slaveAddr = (byte)(slaveAddr << 1);
-
+            //Console.WriteLine("UP: " + upper+ "LW: " + lower );
             return ReadI2CCommand(0, slaveAddr, dataAddr, dataAddrBytes, buffer, pageSize);
         }
 
@@ -206,10 +152,11 @@ namespace CH341A_Programmer
             byte[] writeData = new byte[4];
             memset(writeData, 0xFF, 4);
             writeData[0] = SlaveAddr;
-            writeData[1] = DataAddr[0];
+            writeData[1] = DataAddr[1];
             if (dataAddrBytes > 1)
                 writeData[2] = DataAddr[1];
             writeLen = (uint)(dataAddrBytes + 1);
+            
             if (CH341DLL.CH341StreamI2C(mIndex, writeLen, writeData, (uint)readLen, readData))
                 return readLen;
             else
