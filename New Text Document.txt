@@ -1,0 +1,1251 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+using System.IO;
+using System.Threading;
+
+namespace CH341A_Programmer
+{
+    public class UsbManager
+    {
+        //FLASH 配置状态寄存器地址
+        public static byte WRITE_ENABLE = 0X06; //写使能
+        public static byte WRITE_DISABLE = 0X04;    //写禁止
+        public static byte READ_STATUS_REG1 = 0X05; //读状态寄存器
+        public static byte READ_STATUS_REG2 = 0X35; //读状态寄存器
+        public static byte READ_DATA = 0X03;    //读字节
+        public static byte EWSR = 0X50;    //使能写状态寄存器
+        public static byte FAST_READ = 0X0B;    //快读指令
+        public static byte PAGE_PROGRAM = 0X02; //Byte Prog Mode
+        public static byte SECTOR_ERASE_4K = 0X20;  //Erase 4 KByte of memory array
+        public static byte BLOCK_ERASE_32K = 0X52; //Erase 32 KByte block of memory array
+        public static byte BLOCK_ERASE_64K = 0XD8;  //Erase 64 KByte block of memory array
+        public static byte CHIP_ERASE = 0XC7;   //擦除整个FLASH芯片
+
+        public static bool IsRunning = false;
+        public static bool IsConnected = false;
+
+        public static void memset(byte[] buf, byte val, int size)
+        {
+            int i;
+            for (i = 0; i < size; i++)
+                buf[i] = val;
+        }
+
+        public static void memcpy(byte[] dst, int dst_offst, byte[] src, int src_offst, uint len)
+        {
+            for (int i = 0; i < len; i++)
+            {
+                dst[dst_offst++] = src[src_offst++];
+            }
+
+        }
+
+        public static bool IsProgrammerConnected()
+        {
+            bool result = false;
+
+            IntPtr ptr = CH341DLL.CH341OpenDevice(0);
+
+            result = ptr.ToInt32() == -1 ? false : true;
+
+            CH341DLL.CH341CloseDevice(0);
+
+            IsConnected = result;
+
+            return result;
+        }
+
+        public static byte[] ReadI2CChip(int chipSize, int addressType, int pageSize, ProgressBar pb, ToolStripStatusLabel label)
+        {
+            IsRunning = true;
+            CH341DLL.CH341OpenDevice(0);
+
+            MemoryStream ms = new MemoryStream();
+
+            int bytesRead = 0;
+            byte[] buffer = new byte[pageSize];
+            long address = 0;
+
+            if (pageSize > buffer.Length)
+                pageSize = buffer.Length;
+            if (pageSize < 1)
+                pageSize = 1;
+            if (pageSize > chipSize)
+                pageSize = chipSize;
+
+            if (pb != null)
+            {
+                pb.Maximum = chipSize / pageSize;
+                pb.Value = 0;
+            }
+
+            while (address < chipSize)
+            {
+                if (pageSize > chipSize - address)
+                    pageSize = (int)(chipSize - address);
+
+                bytesRead = bytesRead + ReadI2CBlock(addressType, address, buffer, pageSize);
+                ms.Write(buffer, 0, pageSize);
+
+                address += pageSize;
+
+                if (pb != null)
+                {
+                    pb.Value += 1;
+                    label.Text = "Reading blocks (" + pb.Value + " of " + pb.Maximum + ")";
+                    Application.DoEvents();
+                }
+            }
+
+            CH341DLL.CH341CloseDevice(0);
+            IsRunning = false;
+
+            label.Text = "Reading finished.";
+
+            return ms.ToArray();
+        }
+
+        public static int ReadI2CBlock(int addressType, long address, byte[] buffer, int pageSize)
+        {
+            byte I2C_CHIP_ADDRESS = 0x50;
+
+            byte slaveAddr = 0x50;
+            byte[] dataAddr = new byte[2];
+            int dataAddrBytes = 1;
+
+            ushort number = Convert.ToUInt16(address);
+            byte upper = (byte)((number & 0xFF00) >> 8);
+            byte lower = (byte)(number & 0x00FF);
+
+            if (addressType == 0)
+            {
+                slaveAddr = 0;
+                slaveAddr = (byte)(lower << 1);
+                dataAddr[0] = 0;
+            }
+            else if (addressType == 1)
+            {
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+            }
+            else if (addressType == 2)
+            {
+                if (Tools.IsBitSet(upper, 0))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
+
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+            }
+            else if (addressType == 3)
+            {
+                if (Tools.IsBitSet(upper, 0))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
+                if (Tools.IsBitSet(upper, 1))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 2);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 2);
+
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+            }
+            else if (addressType == 4)
+            {
+                if (Tools.IsBitSet(upper, 0))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
+                if (Tools.IsBitSet(upper, 1))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 2);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 2);
+                if (Tools.IsBitSet(upper, 2))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 3);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 3);
+
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+            }
+            else if (addressType == 5)
+            {
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+                dataAddr[1] = upper;
+                dataAddrBytes = 2;
+            }
+            else if (addressType == 6)
+            {
+                if (Tools.IsBitSet(upper, 0))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
+
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+                dataAddr[1] = upper;
+                dataAddrBytes = 2;
+            }
+
+            slaveAddr = (byte)(slaveAddr << 1);
+
+            return ReadI2CCommand(0, slaveAddr, dataAddr, dataAddrBytes, buffer, pageSize);
+        }
+
+        public static int ReadI2CCommand(uint mIndex, byte SlaveAddr, byte[] DataAddr, int dataAddrBytes, byte[] readData, int readLen)
+        {
+            uint writeLen = 0;
+            byte[] writeData = new byte[4];
+            memset(writeData, 0xFF, 4);
+            writeData[0] = SlaveAddr;
+            writeData[1] = DataAddr[0];
+            if (dataAddrBytes > 1)
+                writeData[2] = DataAddr[1];
+            writeLen = (uint)(dataAddrBytes + 1);
+            if (CH341DLL.CH341StreamI2C(mIndex, writeLen, writeData, (uint)readLen, readData))
+                return readLen;
+            else
+                return 0;
+        }
+
+        public static void WriteI2CChip(Stream dataStream, int chipSize, int addressType, int pageSize, ProgressBar pb, ToolStripLabel label)
+        {
+            IsRunning = true;
+            CH341DLL.CH341OpenDevice(0);
+
+            dataStream.Position = 0;
+
+            int bytesRead = 0;
+            int bytesWrite = 0;
+            byte[] buffer = new byte[pageSize];
+            long address = 0;
+
+            if (pb != null)
+            {
+                pb.Maximum = chipSize / pageSize;
+                pb.Value = 0;
+            }
+
+            while (address < chipSize)
+            {
+                if (pageSize > chipSize - address)
+                    pageSize = (int)(chipSize - address);
+
+                bytesRead = dataStream.Read(buffer, 0, pageSize);
+
+                bytesWrite = bytesWrite + WriteI2CBlock(addressType, address, buffer, pageSize);
+
+                address += pageSize;
+
+                if (pb != null)
+                {
+                    pb.Value += 1;
+                    label.Text = "Writing blocks (" + pb.Value + " of " + pb.Maximum + ")";
+                    Application.DoEvents();
+                }
+
+                // 24 Series need 1.5 ms write time, so delay 2 ms
+                CH341DLL.CH341SetDelaymS(0, 2);
+            }
+
+            CH341DLL.CH341CloseDevice(0);
+            IsRunning = false;
+
+            label.Text = "Writing finished.";
+        }
+
+        public static int WriteI2CBlock(int addressType, long address, byte[] buffer, int pageSize)
+        {
+            byte I2C_CHIP_ADDRESS = 0x50;
+
+            byte slaveAddr = 0x50;
+            byte[] dataAddr = new byte[2];
+            int dataAddrBytes = 1;
+
+            ushort number = Convert.ToUInt16(address);
+            byte upper = (byte)((number & 0xFF00) >> 8);
+            byte lower = (byte)(number & 0x00FF);
+
+            if (addressType == 0)
+            {
+                slaveAddr = 0;
+                slaveAddr = (byte)(lower << 1);
+                dataAddr[0] = 0;
+            }
+            else if (addressType == 1)
+            {
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+            }
+            else if (addressType == 2)
+            {
+                if (Tools.IsBitSet(upper, 0))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
+
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+            }
+            else if (addressType == 3)
+            {
+                if (Tools.IsBitSet(upper, 0))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
+                if (Tools.IsBitSet(upper, 1))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 2);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 2);
+
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+            }
+            else if (addressType == 4)
+            {
+                if (Tools.IsBitSet(upper, 0))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
+                if (Tools.IsBitSet(upper, 1))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 2);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 2);
+                if (Tools.IsBitSet(upper, 2))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 3);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 3);
+
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+            }
+            else if (addressType == 5)
+            {
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+                dataAddr[1] = upper;
+                dataAddrBytes = 2;
+            }
+            else if (addressType == 6)
+            {
+                if (Tools.IsBitSet(upper, 0))
+                    I2C_CHIP_ADDRESS = Tools.SetBit(I2C_CHIP_ADDRESS, 1);
+                else
+                    I2C_CHIP_ADDRESS = Tools.ClearBit(I2C_CHIP_ADDRESS, 1);
+
+                slaveAddr = I2C_CHIP_ADDRESS;
+                dataAddr[0] = lower;
+                dataAddr[1] = upper;
+                dataAddrBytes = 2;
+            }
+
+            slaveAddr = (byte)(slaveAddr << 1);
+
+            return WriteI2CCommand(0, slaveAddr, dataAddr, dataAddrBytes, buffer, pageSize);
+        }
+
+        public static int WriteI2CCommand(uint mIndex, byte SlaveAddr, byte[] DataAddr, int dataAddrBytes, byte[] writeData, int writeLen)
+        {
+            byte[] usbData = new byte[writeLen + dataAddrBytes + 1];
+            usbData[0] = SlaveAddr;
+            usbData[1] = DataAddr[0];
+            if (dataAddrBytes > 1)
+                usbData[2] = DataAddr[1];
+            memcpy(usbData, dataAddrBytes + 1, writeData, 0, (uint)writeLen);
+            uint usbLen = (uint)(writeLen + dataAddrBytes + 1);
+            byte[] readData = new byte[256];
+            memset(readData, 0x00, 256);
+            if (CH341DLL.CH341StreamI2C(mIndex, usbLen, usbData, 0, readData))
+                return writeLen;
+            else
+                return 0;
+        }
+
+        public static string[] ReadSPIChipID()
+        {
+            string[] strId = new string[4];
+            
+            ChipId id = new ChipId();
+
+            IsRunning = true;
+            CH341DLL.CH341OpenDevice(0);
+
+            StartSpiMode25();
+            id = ReadIdSpiMode25();
+            StopSpiMode25();
+
+            CH341DLL.CH341CloseDevice(0);
+            IsRunning = false;
+
+            strId[0] = Tools.ByteToHexString(id.ID9FH);
+            strId[1] = Tools.ByteToHexString(id.ID90H);
+            strId[2] = Tools.ByteToHexString(id.IDABH);
+            strId[3] = Tools.ByteToHexString(id.ID15H);
+
+            return strId;
+        }
+
+        public static void StartSpiMode25()
+        {
+            CH341DLL.CH341SetStream(0, 0x81);
+
+            CH341DLL.CH341SetDelaymS(0, 50);
+
+            SPIWrite(1, 0, 1, new byte[] { 0xAB });
+            //SPIWrite(1, new byte[] { 0xAB });
+
+            CH341DLL.CH341SetDelaymS(0, 2);
+        }
+
+        public static void StopSpiMode25()
+        {
+            CH341DLL.CH341Set_D5_D0(0, 0, 0);
+        }
+
+        public static ChipId ReadIdSpiMode25()
+        {
+            ChipId id = new ChipId();
+
+            byte[] buffer = new byte[4];
+            int result;
+
+            // Read 9F
+            buffer[0] = 0x9F;
+            SPIWrite(0, 0, 1, buffer);
+            memset(buffer, 0xFF, 4);
+            result = SPIRead(1, 0, 3, ref buffer);
+            memcpy(id.ID9FH, 0, buffer, 0, 3);
+
+            // Read 90
+            memset(buffer, 0x00, 4);
+            buffer[0] = 0x90;
+            SPIWrite(0, 0, 4, buffer);
+            result = SPIRead(1, 0, 2, ref buffer);
+            memcpy(id.ID90H, 0, buffer, 0, 2);
+
+            // Read AB
+            memset(buffer, 0x00, 4);
+            buffer[0] = 0xAB;
+            SPIWrite(0, 0, 4, buffer);
+            result = SPIRead(1, 0, 1, ref buffer);
+            memcpy(id.IDABH, 0, buffer, 0, 1);
+
+            // Read 15
+            buffer[0] = 0x15;
+            SPIWrite(0, 0, 1, buffer);
+            memset(buffer, 0xFF, 4);
+            result = SPIRead(1, 0, 2, ref buffer);
+            memcpy(id.ID15H, 0, buffer, 0, 2);
+
+            return id;
+        }
+
+        public static byte[] ReadSPIChip(int chipSize, string pageSize, string spiCommand, int otp, ProgressBar pb, ToolStripStatusLabel label)
+        {
+            byte[] result = null;
+
+            IsRunning = true;
+            CH341DLL.CH341OpenDevice(0);
+
+            StartSpiMode25();
+
+            switch (spiCommand)
+            {
+                case "25":
+                    result = ReadDataSPI25(chipSize, pageSize, spiCommand, otp, pb, label);
+                    break;
+                case "45":
+                    result = ReadDataSPI45(chipSize, pageSize, spiCommand, otp, pb, label);
+                    break;
+                case "95":
+                    result = ReadDataSPI95(chipSize, pageSize, spiCommand, otp, pb, label);
+                    break;
+            }
+
+            StopSpiMode25();
+
+            CH341DLL.CH341CloseDevice(0);
+            IsRunning = false;
+
+            label.Text = "Reading finished.";
+
+            return result;
+        }
+
+        public static byte[] ReadDataSPI25(int chipSize, string pageSize, string spiCommand, int otp, ProgressBar pb, ToolStripStatusLabel label)
+        {
+            MemoryStream ms = new MemoryStream();
+
+            int FLASH_SIZE_128BIT = 16777216;
+            int bytesRead = 0;
+            int address = 0;
+
+            int iPageSize = pageSize == "SSTB" || pageSize == "SSTW" ? 2048 : int.Parse(pageSize);
+
+            byte[] buffer = new byte[iPageSize];
+
+            int bufferSize = buffer.Length;
+            if (bufferSize > chipSize)
+                bufferSize = chipSize;
+
+            if(pb != null)
+            {
+                pb.Maximum = chipSize / iPageSize;
+                pb.Value = 0;
+            }
+
+            if (chipSize > FLASH_SIZE_128BIT)
+                Enable4BitMode();
+
+            while (address < chipSize)
+            {
+                if (iPageSize > chipSize - address)
+                    iPageSize = chipSize - address;
+
+                if (chipSize > FLASH_SIZE_128BIT)
+                    bytesRead = bytesRead + Read32BitAddressSPI25(address, iPageSize, ref buffer);
+                else
+                    bytesRead = bytesRead + ReadSPI25(address, iPageSize, ref buffer);
+
+                ms.Write(buffer, 0, iPageSize);
+
+                address += iPageSize;
+
+                if (pb != null)
+                {
+                    pb.Value += 1;
+                    label.Text = "Reading blocks (" + pb.Value + " of " + pb.Maximum + ")";
+                    Application.DoEvents();
+                }
+            }
+
+            if (chipSize > FLASH_SIZE_128BIT)
+                Disable4BitMode();
+
+            byte[] result = ms.ToArray();
+            ms.Close();
+            ms.Dispose();
+
+            return result;
+        }
+
+        public static int Read32BitAddressSPI25(int address, int pageSize, ref byte[] buffer)
+        {
+            byte[] status = new byte[5];
+
+            status[0] = READ_DATA;
+            status[1] = (byte)((address & 0xFF000000) >> 24);
+            status[2] = (byte)((address & 0x00FF0000) >> 16);
+            status[3] = (byte)((address & 0x0000FF00) >> 8);
+            status[4] = (byte)(address & 0x000000FF);
+
+            SPIWrite(0, 0, 5, status);
+
+            return SPIRead(1, 0, pageSize, ref buffer);
+        }
+
+        public static int ReadSPI25(int address, int pageSize, ref byte[] buffer)
+        {
+            byte[] status = new byte[4];
+
+            status[0] = READ_DATA;
+            status[1] = (byte)((address & 0xFF0000) >> 16);
+            status[2] = (byte)((address & 0x00FF00) >> 8);
+            status[3] = (byte)(address & 0x0000FF);
+
+            SPIWrite(0, 0, 4, status);
+
+            return SPIRead(1, 0, pageSize, ref buffer);
+        }
+
+        public static void Enable4BitMode()
+        {
+            SPIWrite(1, 0, 1, new byte[] { 0xB7 });
+        }
+
+        public static void Disable4BitMode()
+        {
+            SPIWrite(1, 0, 1, new byte[] { 0xE9 });
+        }
+
+        public static void EnableWrite()
+        {
+            SPIWrite(1, 0, 1, new byte[] { 0x06 });
+        }
+
+        public static void DisableWrite()
+        {
+            SPIWrite(1, 0, 1, new byte[] { 0x04 });
+        }
+
+        public static byte[] ReadDataSPI45(int chipSize, string pageSize, string spiCommand, int otp, ProgressBar pb, ToolStripStatusLabel label)
+        {
+            MemoryStream ms = new MemoryStream();
+
+            int bytesRead = 0;
+            int address = 0;
+
+            int iPageSize = pageSize == "SSTB" || pageSize == "SSTW" ? 2048 : int.Parse(pageSize);
+
+            byte[] buffer = new byte[iPageSize];
+
+            int bufferSize = buffer.Length;
+            if (bufferSize > chipSize)
+                bufferSize = chipSize;
+
+            if (pb != null)
+            {
+                pb.Maximum = chipSize / iPageSize;
+                pb.Value = 0;
+            }
+
+            while (address < chipSize)
+            {
+                if (iPageSize > chipSize - address)
+                    iPageSize = chipSize - address;
+
+                bytesRead = bytesRead + ReadSPI45(address, iPageSize, ref buffer);
+
+                ms.Write(buffer, 0, iPageSize);
+
+                address += iPageSize;
+
+                if (pb != null)
+                {
+                    pb.Value += 1;
+                    label.Text = "Reading blocks (" + pb.Value + " of " + pb.Maximum + ")";
+                    Application.DoEvents();
+                }
+
+            }
+
+            byte[] result = ms.ToArray();
+            ms.Close();
+            ms.Dispose();
+
+            return result;
+        }
+
+        public static int ReadSPI45(int address, int pageSize, ref byte[] buffer)
+        {
+            byte[] status = new byte[4];
+
+            status[0] = 0xE8; // Legacy command
+            status[1] = (byte)((address & 0xFF0000) >> 16);
+            status[2] = (byte)((address & 0x00FF00) >> 8);
+            status[3] = 0x00;
+
+            SPIWrite(0, 0, 4, status);
+
+            return SPIRead(1, 0, pageSize, ref buffer);
+        }
+
+        public static byte[] ReadDataSPI95(int chipSize, string pageSize, string spiCommand, int otp, ProgressBar pb, ToolStripStatusLabel label)
+        {
+            MemoryStream ms = new MemoryStream();
+
+            int bytesRead = 0;
+            int address = 0;
+
+            int iPageSize = pageSize == "SSTB" || pageSize == "SSTW" ? 2048 : int.Parse(pageSize);
+
+            byte[] buffer = new byte[iPageSize];
+
+            int bufferSize = buffer.Length;
+            if (bufferSize > chipSize)
+                bufferSize = chipSize;
+
+            if (pb != null)
+            {
+                pb.Maximum = chipSize / iPageSize;
+                pb.Value = 0;
+            }
+
+            while (address < chipSize)
+            {
+                if (iPageSize > chipSize - address)
+                    iPageSize = chipSize - address;
+
+                bytesRead = bytesRead + ReadSPI95(address, iPageSize, chipSize, ref buffer);
+
+                ms.Write(buffer, 0, iPageSize);
+
+                address += iPageSize;
+
+                if (pb != null)
+                {
+                    pb.Value += 1;
+                    label.Text = "Reading blocks (" + pb.Value + " of " + pb.Maximum + ")";
+                    Application.DoEvents();
+                }
+            }
+
+            byte[] result = ms.ToArray();
+            ms.Close();
+            ms.Dispose();
+
+            return result;
+        }
+
+        public static int ReadSPI95(int address, int pageSize, int chipSize, ref byte[] buffer)
+        {
+            byte[] status = new byte[4];
+            status[0] = READ_DATA;
+            int bufferLen = 0;
+
+            if (chipSize < 512)
+            {
+                status[1] = (byte)address;
+                bufferLen = 2;
+            }
+            else if (chipSize == 512)
+            {
+                if (address < 255)
+                    status[1] = (byte)address;
+                else
+                    status[1] = (byte)(address - 256);
+                bufferLen = 2;
+            }
+            else if (chipSize > 512 && chipSize <= 65536)
+            {
+                status[1] = (byte)((address & 0xFF00) >> 8);
+                status[2] = (byte)(address & 0x00FF);
+                bufferLen = 3;
+            }
+            else if (chipSize > 65536)
+            {
+                status[1] = (byte)((address & 0xFF0000) >> 16);
+                status[2] = (byte)((address & 0x00FF00) >> 8);
+                status[3] = (byte)(address & 0x0000FF);
+                bufferLen = 4;
+            }
+
+            SPIWrite(0, 0, bufferLen, status);
+
+            return SPIRead(1, 0, pageSize, ref buffer);
+        }
+
+        public static void WriteSPIChip(Stream stream, int chipSize, string pageSize, string spiCommand, int otp, ProgressBar pb, ToolStripStatusLabel label)
+        {
+            IsRunning = true;
+            CH341DLL.CH341OpenDevice(0);
+
+            stream.Position = 0;
+
+            StartSpiMode25();
+
+            CH341DLL.CH341SetDelaymS(0, 50);
+
+            switch (spiCommand)
+            {
+                case "25":
+                    WriteDataSPI25(stream, chipSize, pageSize, spiCommand, otp, pb, label);
+                    break;
+                case "45":
+                    WriteDataSPI45(stream, chipSize, pageSize, spiCommand, otp, pb, label);
+                    break;
+                case "95":
+                    WriteDataSPI95(stream, chipSize, pageSize, spiCommand, otp, pb, label);
+                    break;
+            }
+
+            StopSpiMode25();
+
+            CH341DLL.CH341CloseDevice(0);
+            IsRunning = false;
+
+            label.Text = "Writing finished.";
+        }
+
+        public static void WriteDataSPI25(Stream stream, int chipSize, string pageSize, string spiCommand, int otp, ProgressBar pb, ToolStripStatusLabel label)
+        {
+            int FLASH_SIZE_128BIT = 16777216;
+            int bytesWrite = 0;
+            int address = 0;
+
+            int iPageSize = pageSize == "SSTB" || pageSize == "SSTW" ? 2048 : int.Parse(pageSize);
+
+            byte[] buffer = new byte[iPageSize];
+
+            if (pb != null)
+            {
+                pb.Maximum = chipSize / iPageSize;
+                pb.Value = 0;
+            }
+
+            if (chipSize > FLASH_SIZE_128BIT)
+                Enable4BitMode();
+
+            while (address < chipSize)
+            {
+                if ((((pageSize == "SSTB") || (pageSize == "SSTB")) && (address == 0)) || (int.TryParse(pageSize, out int r)))
+                    EnableWrite();
+
+                if (chipSize - address < iPageSize)
+                    iPageSize = chipSize - address;
+
+                stream.Read(buffer, 0, iPageSize);
+
+                if (pageSize == "SSTB")
+                {
+                    if (address == 0)
+                    {
+                        bytesWrite = bytesWrite + WriteSPI25(0xAF, address, iPageSize, buffer);
+                    }
+                    else
+                    {
+                        bytesWrite = bytesWrite + WriteSPISSTB(0xAF, buffer[0]);
+                    }
+                }
+                else if (pageSize == "SSTB")
+                {
+                    if (address == 0)
+                    {
+                        bytesWrite = bytesWrite + WriteSPI25(0xAD, address, iPageSize, buffer);
+                    }
+                    else
+                    {
+                        bytesWrite = bytesWrite + WriteSPISSTW(0xAD, buffer[0], buffer[1]);
+                    }
+                }
+                else
+                {
+                    if (chipSize > FLASH_SIZE_128BIT)
+                        bytesWrite = bytesWrite + Write32BitAddressSPI25(0x02, address, iPageSize, buffer);
+                    else
+                        bytesWrite = bytesWrite + WriteSPI25(0x02, address, iPageSize, buffer);
+                }
+
+                while (BusySPI25())
+                {
+                    Application.DoEvents();
+                }
+
+                address += iPageSize;
+
+                if (pb != null)
+                {
+                    pb.Value += 1;
+                    label.Text = "Writing blocks (" + pb.Value + " of " + pb.Maximum + ")";
+                    Application.DoEvents();
+                }
+
+            }
+
+            if (chipSize > FLASH_SIZE_128BIT)
+                Disable4BitMode();
+
+            DisableWrite();
+        }
+
+        public static int Erase4KSPI25(byte operationCode, int address)
+        {
+            EnableWrite();
+
+            byte[] status = new byte[4];
+
+            status[0] = operationCode;
+            status[1] = (byte)((address & 0xFF0000) >> 16);
+            status[2] = (byte)((address & 0x00FF00) >> 8);
+            status[3] = (byte)(address & 0x0000FF);
+
+            int result = SPIWrite(1, 0, 4, status);
+
+            DisableWrite();
+
+            CH341DLL.CH341SetDelaymS(0, 2);
+
+            return result;
+        }
+
+        public static int WriteSPI25(byte operationCode, int address, int bufferLen, byte[] buffer)
+        {
+            byte[] status = new byte[4];
+
+            status[0] = operationCode;
+            status[1] = (byte)((address & 0xFF0000) >> 16);
+            status[2] = (byte)((address & 0x00FF00) >> 8);
+            status[3] = (byte)(address & 0x0000FF);
+
+            SPIWrite(0, 0, 4, status);
+
+            int result = SPIWrite(1, 0, bufferLen, buffer);
+
+            CH341DLL.CH341SetDelaymS(0, 2);
+
+            return result;
+        }
+
+        public static int Erase4K32BitAddressSPI25(byte operationCode, int address)
+        {
+            byte[] status = new byte[5];
+
+            status[0] = operationCode;
+            status[1] = (byte)((address & 0xFF000000) >> 24);
+            status[2] = (byte)((address & 0x00FF0000) >> 16);
+            status[3] = (byte)((address & 0x0000FF00) >> 8);
+            status[4] = (byte)(address & 0x000000FF);
+
+            int result = SPIWrite(1, 0, 5, status);
+
+            CH341DLL.CH341SetDelaymS(0, 2);
+
+            return result;
+        }
+
+        public static int Write32BitAddressSPI25(byte operationCode, int address, int bufferLen, byte[] buffer)
+        {
+            byte[] status = new byte[5];
+
+            status[0] = operationCode;
+            status[1] = (byte)((address & 0xFF000000) >> 24);
+            status[2] = (byte)((address & 0x00FF0000) >> 16);
+            status[3] = (byte)((address & 0x0000FF00) >> 8);
+            status[4] = (byte)(address & 0x000000FF);
+
+            SPIWrite(0, 0, 5, status);
+
+            int result = SPIWrite(1, 0, bufferLen, buffer);
+
+            CH341DLL.CH341SetDelaymS(0, 2);
+
+            return result;
+        }
+
+        public static int WriteSPISSTB(byte operationCode, byte data)
+        {
+            EnableWrite();
+            return SPIWrite(1, 0, 2, new byte[] { operationCode, data }) - 1;
+        }
+
+        public static int WriteSPISSTW(byte operationCode, byte data1, byte data2)
+        {
+            EnableWrite();
+            return SPIWrite(1, 0, 3, new byte[] { operationCode, data1, data2 }) - 1;
+        }
+
+        public static bool BusySPI25()
+        {
+            byte[] reg = new byte[] { 0xFF }; 
+           ReadRegisterSPI25(ref reg);
+
+            BitArray ba = new BitArray(reg);
+            bool result = ba[0];
+
+            return result;
+        }
+
+        public static void WriteRegisterSPI25(byte register, byte operationCode = 0x01)
+        {
+            byte[] buffer = new byte[2];
+
+            SPIWrite(1, 0, 1, new byte[] { 0x50 });
+
+            buffer[0] = operationCode;
+            buffer[1] = register;
+
+            SPIWrite(1, 0, 2, buffer);
+        }
+
+        public static void WriteRegisterSPI25(byte register1, byte register2, byte operationCode = 0x01)
+        {
+            byte[] buffer = new byte[2];
+
+            SPIWrite(1, 0, 1, new byte[] { 0x50 });
+
+            buffer[0] = operationCode;
+            buffer[1] = register1;
+            buffer[2] = register2;
+
+            SPIWrite(1, 0, 3, buffer);
+        }
+
+        public static int ReadRegisterSPI25(ref byte[] register, byte operationCode = 0x05)
+        {
+            SPIWrite(0, 0, 1, new byte[] { operationCode });
+            return SPIRead(1, 0, 1, ref register);
+        }
+
+        public static void WriteDataSPI45(Stream stream, int chipSize, string pageSize, string spiCommand, int otp, ProgressBar pb, ToolStripStatusLabel label)
+        {
+            int bytesWrite = 0;
+            int address = 0;
+
+            int iPageSize = int.Parse(pageSize);
+
+            byte[] buffer = new byte[iPageSize];
+
+            if (pb != null)
+            {
+                pb.Maximum = chipSize / iPageSize;
+                pb.Value = 0;
+            }
+
+            while (address < chipSize / iPageSize)
+            {
+                stream.Read(buffer, 0, iPageSize);
+
+                bytesWrite = bytesWrite + WriteSPI45(address, iPageSize, buffer);
+
+                while (BusySPI45())
+                {
+                    Application.DoEvents();
+                }
+
+                address += 1;
+
+                if (pb != null)
+                {
+                    pb.Value += 1;
+                    label.Text = "Writing blocks (" + pb.Value + " of " + pb.Maximum + ")";
+                    Application.DoEvents();
+                }
+            }
+
+        }
+
+        public static int WriteSPI45(int address, int pageSize, byte[] buffer)
+        {
+            byte[] status = new byte[4];
+
+            status[0] = 0x82; // Legacy command
+            status[1] = (byte)((address & 0xFF0000) >> 16);
+            status[2] = (byte)((address & 0x00FF00) >> 8);
+            status[3] = 0x00;
+
+            SPIWrite(0, 0, 4, status);
+
+            int result =  SPIWrite(1, 0, pageSize, buffer);
+
+            CH341DLL.CH341SetDelaymS(0, 2);
+
+            return result;
+        }
+
+        public static bool BusySPI45()
+        {
+            byte[] reg = new byte[] { 0x00 };
+            ReadRegisterSPI45(ref reg);
+
+            BitArray ba = new BitArray(reg);
+            bool result = ba[7];
+
+            return result;
+        }
+
+        public static int ReadRegisterSPI45(ref byte[] register, byte operationCode = 0xD7)
+        {
+            SPIWrite(0, 0, 1, new byte[] { operationCode });
+            return SPIRead(1, 0, 1, ref register);
+        }
+
+        public static void WriteDataSPI95(Stream stream, int chipSize, string pageSize, string spiCommand, int otp, ProgressBar pb, ToolStripStatusLabel label)
+        {
+            int bytesWrite = 0;
+            int address = 0;
+
+            int iPageSize = int.Parse(pageSize);
+
+            byte[] buffer = new byte[iPageSize];
+
+            if (pb != null)
+            {
+                pb.Maximum = chipSize / iPageSize;
+                pb.Value = 0;
+            }
+
+            
+
+            while (address < chipSize)
+            {
+                EnableWrite();
+
+                if (chipSize - address < iPageSize)
+                    iPageSize = chipSize - address;
+
+                stream.Read(buffer, 0, iPageSize);
+
+                bytesWrite = bytesWrite + WriteSPI95(address, iPageSize, chipSize, buffer);
+
+                while (BusySPI25())
+                {
+                    Application.DoEvents();
+                }
+
+                address += iPageSize;
+
+                if (pb != null)
+                {
+                    pb.Value += 1;
+                    label.Text = "Writing blocks (" + pb.Value + " of " + pb.Maximum + ")";
+                    Application.DoEvents();
+                }
+            }
+
+            DisableWrite();
+        }
+
+        public static int WriteSPI95(int address, int pageSize, int chipSize, byte[] buffer)
+        {
+
+            byte[] status = new byte[4];
+            
+            int bufferLen = 0;
+
+            if (chipSize < 512)
+            {
+                status[0] = 0x02;
+                status[1] = (byte)address;
+                bufferLen = 2;
+            }
+            else if (chipSize == 512)
+            {
+                if (address < 255)
+                {
+                    status[0] = 0x02;
+                    status[1] = (byte)address;
+                }
+                else
+                {
+                    status[0] = 0x0A;
+                    status[1] = (byte)(address - 256);
+                }
+                bufferLen = 2;
+            }
+            else if (chipSize > 512 && chipSize <= 65536)
+            {
+                status[0] = 0x02;
+                status[1] = (byte)((address & 0xFF00) >> 8);
+                status[2] = (byte)(address & 0x00FF);
+                bufferLen = 3;
+            }
+            else if (chipSize > 65536)
+            {
+                status[0] = 0x02;
+                status[1] = (byte)((address & 0xFF0000) >> 16);
+                status[2] = (byte)((address & 0x00FF00) >> 8);
+                status[3] = (byte)(address & 0x0000FF);
+                bufferLen = 4;
+            }
+
+            SPIWrite(0, 0, bufferLen, status);
+
+            int result = SPIWrite(1, 0, pageSize, buffer);
+
+            CH341DLL.CH341SetDelaymS(0, 2);
+
+            return result;
+        }
+
+        public static int SPIWrite(int bufferLen, byte[] buffer)
+        {
+            int result = 0;
+
+            if (!CH341DLL.CH341StreamSPI4(0, 0, (uint)bufferLen, buffer))
+                result = 0;
+            else
+                result = bufferLen;
+
+            return result;
+        }
+
+        public static int SPIRead(int bufferLen, ref byte[] buffer)
+        {
+            int result = 0;
+
+            if (!CH341DLL.CH341StreamSPI4(0, 0, (uint)bufferLen, buffer))
+                result = 0;
+            else
+                result = bufferLen;
+
+            return result;
+        }
+        public static int SPIWrite(int value, int index, int bufferLen, byte[] buffer)
+        {
+            int result = 0;
+
+            CH341DLL.CH341Set_D5_D0(0, 0x29, 0);
+
+            if (!CH341DLL.CH341StreamSPI4(0, 0, (uint)bufferLen, buffer))
+                result =  0;
+            else
+                result = bufferLen;
+
+            if (value == 1)
+                CH341DLL.CH341Set_D5_D0(0, 0x29, 1);
+
+            return result;
+        }
+
+        public static int SPIRead(int value, int index, int bufferLen, ref byte[] buffer)
+        {
+            int result = 0;
+
+            CH341DLL.CH341Set_D5_D0(0, 0x29, 0);
+
+            if (!CH341DLL.CH341StreamSPI4(0, 0, (uint)bufferLen, buffer))
+                result = 0;
+            else
+                result = bufferLen;
+
+            if (value == 1)
+                CH341DLL.CH341Set_D5_D0(0, 0x29, 1);
+
+            return result;
+        }
+
+        public static void EraseSPIChip25(ToolStripStatusLabel label)
+        {
+            IsRunning = true;
+            CH341DLL.CH341OpenDevice(0);
+
+            StartSpiMode25();
+            EnableWrite();
+
+            SPIWrite(1, 0, 1, new byte[] { 0x62 }); // ATMEL
+            SPIWrite(1, 0, 1, new byte[] { 0x60 }); // SST
+            SPIWrite(1, 0, 1, new byte[] { 0xC7 }); // STANDARD
+
+            while (BusySPI25())
+            {
+                label.Text = "Chip earsing in progress.";
+                Application.DoEvents();
+            }
+
+            DisableWrite();
+            StopSpiMode25();
+
+            CH341DLL.CH341CloseDevice(0);
+            IsRunning = false;
+
+            label.Text = "Chip is earsed successfully.";
+        }
+
+        public static void EraseSPIChip45(ToolStripStatusLabel label)
+        {
+            IsRunning = true;
+            CH341DLL.CH341OpenDevice(0);
+
+            SPIWrite(1, 0, 4, new byte[] { 0xC7, 0x94, 0x80, 0x9A });
+
+            while (BusySPI45())
+            {
+                label.Text = "Chip earsing in progress.";
+                Application.DoEvents();
+            }
+
+            CH341DLL.CH341CloseDevice(0);
+            IsRunning = false;
+
+            label.Text = "Chip is earsed successfully.";
+        }
+    }
+}
